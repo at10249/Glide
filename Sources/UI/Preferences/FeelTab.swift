@@ -119,7 +119,7 @@ struct FeelTab: View {
 
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18))
-                .foregroundStyle(isSelected ? .accent : .secondary.opacity(0.4))
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.4))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -205,7 +205,7 @@ struct FeelTab: View {
     private func gestureRow(for rule: GestureRule) -> some View {
         HStack(spacing: 12) {
             Image(systemName: rule.action.iconName)
-                .foregroundStyle(.accent)
+                .foregroundStyle(Color.accentColor)
                 .font(.system(size: 16, weight: .medium))
                 .frame(width: 24)
 

@@ -1,5 +1,6 @@
 #include "GlideMultitouchBridge.h"
 
+#include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
 #include <math.h>
 #include <pthread.h>
@@ -41,6 +42,7 @@ typedef struct {
 
 typedef int (*MTContactCallback)(MTDeviceRef, MTTouch *, int32_t, double, int32_t);
 typedef MTDeviceRef (*MTDeviceCreateDefaultFunction)(void);
+typedef CFArrayRef (*MTDeviceCreateListFunction)(void);
 typedef void (*MTRegisterContactFrameCallbackFunction)(MTDeviceRef, MTContactCallback);
 typedef void (*MTUnregisterContactFrameCallbackFunction)(MTDeviceRef, MTContactCallback);
 typedef void (*MTDeviceStartFunction)(MTDeviceRef, int32_t);
@@ -140,6 +142,50 @@ static void remember_forwarded_contacts(
 static bool resolve_symbol(void *handle, const char *name, void **result) {
     *result = dlsym(handle, name);
     return *result != NULL;
+}
+
+// MTDeviceCreateDefault is not always the trackpad. On a MacBook Pro with a
+// Touch Bar it returns the Touch Bar (about 232 x 8 mm), which never reports
+// trackpad contacts, so every gesture silently does nothing. Pick the device
+// with the largest sensor surface from MTDeviceCreateList instead, and fall back
+// to the default device when the list or the dimensions call is unavailable.
+static MTDeviceRef create_trackpad_device(
+    void *handle,
+    MTDeviceCreateDefaultFunction create_default,
+    MTDeviceGetSurfaceDimensionsFunction get_dimensions
+) {
+    MTDeviceCreateListFunction create_list = NULL;
+    if (get_dimensions != NULL &&
+        resolve_symbol(handle, "MTDeviceCreateList", (void **)&create_list)) {
+        CFArrayRef list = create_list();
+        if (list != NULL) {
+            MTDeviceRef best = NULL;
+            int64_t best_area = 0;
+            CFIndex count = CFArrayGetCount(list);
+            for (CFIndex index = 0; index < count; index++) {
+                MTDeviceRef candidate = (MTDeviceRef)CFArrayGetValueAtIndex(list, index);
+                int32_t width = 0;
+                int32_t height = 0;
+                if (candidate == NULL || get_dimensions(candidate, &width, &height) != 0) {
+                    continue;
+                }
+                int64_t area = (int64_t)width * (int64_t)height;
+                if (area > best_area) {
+                    best_area = area;
+                    best = candidate;
+                }
+            }
+            if (best != NULL) {
+                // The list owns its devices; keep ours alive past the list's release.
+                CFRetain(best);
+            }
+            CFRelease(list);
+            if (best != NULL) {
+                return best;
+            }
+        }
+    }
+    return create_default();
 }
 
 static int contact_frame_callback(
@@ -366,7 +412,7 @@ bool GLDTStart(GLDTFrameCallback callback, void *context) {
         return false;
     }
 
-    MTDeviceRef created_device = create_device();
+    MTDeviceRef created_device = create_trackpad_device(handle, create_device, resolved_dimensions);
     if (created_device == NULL) {
         if (opened_here) dlclose(handle);
         pthread_mutex_lock(&state_lock);
